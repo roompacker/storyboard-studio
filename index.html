@@ -915,6 +915,9 @@ async function generateAllImages() {
     $('#imgProgressBar').classList.remove('hidden');
 
     const total = state.scenes.length;
+    const remaining = state.scenes.filter(s => !s.imageData).length;
+    const estMin = Math.ceil(remaining * 15 / 60);
+    setStatus('imgStatusText', `🎨 ${remaining}개 이미지 생성 시작! (예상 ${estMin}~${estMin + 2}분)`);
     let completed = 0;
 
     for (let i = 0; i < total; i++) {
@@ -925,6 +928,15 @@ async function generateAllImages() {
         continue;
       }
 
+      // 첫 번째 이미지가 아니면 먼저 대기 (API 한도 방지)
+      if (i > 0 && !state.scenes[i - 1]?.skipDelay) {
+        const waitSec = state.imageModel.includes('pro') ? 15 : 10;
+        for (let s = waitSec; s > 0; s--) {
+          setStatus('imgStatusText', `⏳ API 보호 대기 ${s}초... (장면 ${i + 1} 준비 중)`);
+          await sleep(1000);
+        }
+      }
+
       const sceneEl = $(`#scene-${i}`);
       sceneEl.className = 'scene-item generating';
       const imgWrap = sceneEl.querySelector('.scene-img-wrap');
@@ -933,20 +945,25 @@ async function generateAllImages() {
       setStatus('imgStatusText', `🎨 장면 ${i + 1}/${total} 이미지 생성 중...`);
 
       try {
-        // 최대 2번 재시도
+        // 최대 3번 재시도
         let result = null;
         let lastErr = null;
-        for (let attempt = 0; attempt < 2; attempt++) {
+        for (let attempt = 0; attempt < 3; attempt++) {
           try {
             result = await callGeminiImage(state.scenes[i].imagePrompt);
             break;
           } catch(retryErr) {
             lastErr = retryErr;
-            if (attempt === 0 && retryErr.message.includes('한도')) {
-              setStatus('imgStatusText', `⏳ 장면 ${i + 1} API 한도 초과, 30초 대기 후 재시도...`);
-              await sleep(30000);
-            } else if (attempt === 0) {
-              await sleep(5000);
+            if (retryErr.message.includes('한도') || retryErr.message.includes('429')) {
+              // API 한도 초과 → 카운트다운 대기
+              const waitSec = (attempt + 1) * 30;
+              for (let s = waitSec; s > 0; s--) {
+                setStatus('imgStatusText', `⏳ 장면 ${i + 1} API 한도 초과! ${s}초 후 재시도 (${attempt + 2}/3)`);
+                await sleep(1000);
+              }
+            } else if (attempt < 2) {
+              setStatus('imgStatusText', `⚠️ 장면 ${i + 1} 실패, 10초 후 재시도...`);
+              await sleep(10000);
             }
           }
         }
@@ -960,18 +977,12 @@ async function generateAllImages() {
 
       } catch(e) {
         console.error(`장면 ${i+1} 이미지 생성 실패:`, e);
-        imgWrap.innerHTML = `<div class="placeholder" style="color:var(--danger)">⚠️ 생성 실패<br><small>${e.message}</small></div>`;
+        imgWrap.innerHTML = `<div class="placeholder" style="color:var(--danger)">⚠️ 생성 실패<br><small>${e.message}</small><br><small>터치하면 재시도</small></div>`;
         sceneEl.className = 'scene-item error';
       }
 
       completed++;
       setProgress('imgProgressFill', (completed / total) * 100);
-
-      // API 속도 제한 대비 딜레이 (모델에 따라 조절)
-      if (i < total - 1) {
-        const delay = state.imageModel.includes('pro') ? 5000 : 3000;
-        await sleep(delay);
-      }
     }
 
     const successCount = state.scenes.filter(s => s.imageData).length;
