@@ -440,7 +440,7 @@ body::before{
         <label>장면 수</label>
         <div class="scene-count-ctrl">
           <button id="sceneDown">−</button>
-          <span id="sceneCount">8</span>
+          <span id="sceneCount">5</span>
           <button id="sceneUp">+</button>
         </div>
       </div>
@@ -520,7 +520,7 @@ const state = {
   apiKey: '',
   textModel: 'gemini-2.5-flash',
   imageModel: 'gemini-2.5-flash-image',
-  sceneCount: 8,
+  sceneCount: 5,
   aspectRatio: '16:9',
   imageStyle: 'cinematic realistic photograph',
   scenes: [],       // [{desc, prompt, imageData, imageMime}]
@@ -570,6 +570,11 @@ function setupEvents() {
     });
     $('#imageModel').addEventListener('change', () => {
       state.imageModel = $('#imageModel').value;
+      if (state.imageModel.includes('pro')) {
+        showToast('⚠️ Pro 모델은 유료 등급 필요! 무료는 2.5 Flash 추천', 'error');
+      } else if (state.imageModel.includes('3.1')) {
+        showToast('💡 3.1 모델은 최신이지만 제한 있을 수 있어요', 'success');
+      }
     });
 
     // 장면 수 조절
@@ -706,9 +711,14 @@ async function callGeminiImage(prompt) {
   if (!res.ok) {
     const errData = await res.json().catch(() => ({}));
     const msg = errData?.error?.message || '';
-    if (res.status === 429) throw new Error('API 한도 초과! 30초 후 다시 시도');
-    if (res.status === 400 && msg.includes('not found')) throw new Error('이미지 모델을 사용할 수 없습니다. 다른 모델을 선택해주세요.');
+    if (res.status === 429 || msg.includes('Resource') || msg.includes('quota') || msg.includes('rate')) {
+      throw new Error('API 한도 초과! 잠시 후 다시 시도');
+    }
+    if (res.status === 400 && (msg.includes('not found') || msg.includes('not supported'))) {
+      throw new Error('이 이미지 모델은 무료에서 안 돼요. "2.5 Flash Image" 선택해주세요!');
+    }
     if (res.status === 400 && msg.includes('API_KEY')) throw new Error('API 키가 올바르지 않습니다.');
+    if (res.status === 403) throw new Error('API 키 권한이 없습니다.');
     throw new Error(msg || `이미지 API 오류 (${res.status})`);
   }
 
@@ -916,8 +926,8 @@ async function generateAllImages() {
 
     const total = state.scenes.length;
     const remaining = state.scenes.filter(s => !s.imageData).length;
-    const estMin = Math.ceil(remaining * 15 / 60);
-    setStatus('imgStatusText', `🎨 ${remaining}개 이미지 생성 시작! (예상 ${estMin}~${estMin + 2}분)`);
+    const estMin = Math.ceil(remaining * 35 / 60);
+    setStatus('imgStatusText', `🎨 ${remaining}개 이미지 생성 시작! (예상 약 ${estMin}분, 무료 API는 느려요)`);
     let completed = 0;
 
     for (let i = 0; i < total; i++) {
@@ -928,11 +938,11 @@ async function generateAllImages() {
         continue;
       }
 
-      // 첫 번째 이미지가 아니면 먼저 대기 (API 한도 방지)
-      if (i > 0 && !state.scenes[i - 1]?.skipDelay) {
-        const waitSec = state.imageModel.includes('pro') ? 15 : 10;
+      // ★ 첫 번째 이미지 외에는 30초 대기 (무료 API 한도 보호)
+      if (completed > 0) {
+        const waitSec = 30;
         for (let s = waitSec; s > 0; s--) {
-          setStatus('imgStatusText', `⏳ API 보호 대기 ${s}초... (장면 ${i + 1} 준비 중)`);
+          setStatus('imgStatusText', `⏳ 다음 이미지까지 ${s}초 대기 중... (장면 ${i + 1}/${total} 대기)`);
           await sleep(1000);
         }
       }
@@ -954,16 +964,16 @@ async function generateAllImages() {
             break;
           } catch(retryErr) {
             lastErr = retryErr;
-            if (retryErr.message.includes('한도') || retryErr.message.includes('429')) {
-              // API 한도 초과 → 카운트다운 대기
-              const waitSec = (attempt + 1) * 30;
+            if (retryErr.message.includes('한도') || retryErr.message.includes('429') || retryErr.message.includes('Resource')) {
+              // API 한도 초과 → 60초씩 증가하며 대기
+              const waitSec = (attempt + 1) * 60;
               for (let s = waitSec; s > 0; s--) {
-                setStatus('imgStatusText', `⏳ 장면 ${i + 1} API 한도 초과! ${s}초 후 재시도 (${attempt + 2}/3)`);
+                setStatus('imgStatusText', `⏳ API 한도 초과! ${s}초 후 재시도 (${attempt + 2}/3회차)`);
                 await sleep(1000);
               }
             } else if (attempt < 2) {
-              setStatus('imgStatusText', `⚠️ 장면 ${i + 1} 실패, 10초 후 재시도...`);
-              await sleep(10000);
+              setStatus('imgStatusText', `⚠️ 장면 ${i + 1} 오류, 15초 후 재시도...`);
+              await sleep(15000);
             }
           }
         }
@@ -974,6 +984,7 @@ async function generateAllImages() {
 
         imgWrap.innerHTML = `<img src="data:${result.mimeType};base64,${result.data}" alt="장면 ${i+1}">`;
         sceneEl.className = 'scene-item done';
+        showToast(`장면 ${i + 1} 생성 완료!`, 'success');
 
       } catch(e) {
         console.error(`장면 ${i+1} 이미지 생성 실패:`, e);
