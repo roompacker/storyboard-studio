@@ -420,9 +420,12 @@ body::before{
         <div class="hint">무료 API 키는 2.5 Flash Image 추천!</div>
       </div>
     </div>
+    <div style="margin-top:10px;display:flex;gap:8px">
+      <button class="btn btn-secondary" id="btnTestText" style="flex:1;padding:10px;font-size:12px">🔤 텍스트 API 테스트</button>
+      <button class="btn btn-secondary" id="btnTestImage" style="flex:1;padding:10px;font-size:12px">🖼️ 이미지 API 테스트</button>
+    </div>
+    <div id="apiTestResult" style="font-size:12px;margin-top:8px;min-height:20px;color:var(--text2);text-align:center"></div>
   </div>
-
-  <!-- STEP 2: 대본 입력 -->
   <div class="card" id="card-script">
     <div class="card-title"><span class="num">2</span> 대본 입력</div>
     <div class="preset-chips">
@@ -636,8 +639,98 @@ function setupEvents() {
     // 리셋
     $('#btnReset').addEventListener('click', resetAll);
 
+    // API 테스트 버튼
+    $('#btnTestText').addEventListener('click', testTextAPI);
+    $('#btnTestImage').addEventListener('click', testImageAPI);
+
   } catch(e) {
     console.error('이벤트 설정 오류:', e);
+  }
+}
+
+/* ===== API 텍스트 테스트 ===== */
+async function testTextAPI() {
+  const key = $('#apiKey').value.trim();
+  if (!key) { showToast('API 키를 먼저 입력!', 'error'); return; }
+  state.apiKey = key;
+  localStorage.setItem('sbs-apiKey', key);
+
+  const resultEl = $('#apiTestResult');
+  resultEl.textContent = '🔄 텍스트 API 테스트 중...';
+  resultEl.style.color = 'var(--warning)';
+
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${state.textModel}:generateContent?key=${state.apiKey}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: '한국어로 "안녕" 이라고만 답해' }] }],
+        generationConfig: { maxOutputTokens: 50 }
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.error?.message || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    resultEl.textContent = `✅ 텍스트 API 정상! 응답: "${text.trim().substring(0, 30)}"`;
+    resultEl.style.color = 'var(--accent)';
+  } catch(e) {
+    resultEl.textContent = `❌ 텍스트 API 실패: ${e.message}`;
+    resultEl.style.color = 'var(--danger)';
+  }
+}
+
+/* ===== API 이미지 테스트 (1장만) ===== */
+async function testImageAPI() {
+  const key = $('#apiKey').value.trim();
+  if (!key) { showToast('API 키를 먼저 입력!', 'error'); return; }
+  state.apiKey = key;
+  localStorage.setItem('sbs-apiKey', key);
+
+  const resultEl = $('#apiTestResult');
+  resultEl.textContent = '🔄 이미지 API 테스트 중... (10~30초 소요)';
+  resultEl.style.color = 'var(--warning)';
+
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${state.imageModel}:generateContent?key=${state.apiKey}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: 'A simple blue circle on white background, minimal, clean' }] }],
+        generationConfig: { responseModalities: ["TEXT", "IMAGE"] }
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const msg = err?.error?.message || '';
+      if (res.status === 429 || msg.includes('Resource') || msg.includes('quota')) {
+        resultEl.innerHTML = `❌ <b>이미지 API 한도 초과!</b><br>오늘 무료 한도를 다 썼어요.<br>내일 오전에 다시 시도하거나,<br>Google AI Studio에서 유료 결제 설정하세요.`;
+        resultEl.style.color = 'var(--danger)';
+        return;
+      }
+      throw new Error(msg || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    const parts = data?.candidates?.[0]?.content?.parts || [];
+    let hasImage = false;
+    for (const part of parts) {
+      if (part.inlineData) { hasImage = true; break; }
+    }
+    if (hasImage) {
+      resultEl.textContent = '✅ 이미지 API 정상 작동! 이미지 생성 가능!';
+      resultEl.style.color = 'var(--accent)';
+      showToast('이미지 API 정상!', 'success');
+    } else {
+      resultEl.textContent = '⚠️ 응답은 왔지만 이미지가 없어요. 다시 시도해보세요.';
+      resultEl.style.color = 'var(--warning)';
+    }
+  } catch(e) {
+    resultEl.textContent = `❌ 이미지 API 실패: ${e.message}`;
+    resultEl.style.color = 'var(--danger)';
   }
 }
 
